@@ -138,12 +138,19 @@ export class PgStorage implements IStorage {
   }
 
   async initialize() {
-    const existingUser = await this.getUser("default-user");
-    if (!existingUser) {
-      await db.insert(users).values({
-        id: "default-user",
-        plan: "free",
-      });
+    try {
+      const existingUser = await this.getUser("default-user");
+      if (!existingUser) {
+        await db.insert(users).values({
+          id: "default-user",
+          plan: "free",
+        });
+      }
+    } catch (error) {
+      // Ignore duplicate key errors - user already exists
+      if (error.code !== '23505') {
+        throw error;
+      }
     }
   }
 }
