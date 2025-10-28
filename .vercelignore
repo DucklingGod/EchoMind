@@ -1,0 +1,17 @@
+node_modules
+.env
+.env.local
+.replit
+.upm
+replit.nix
+.cache
+.vite
+tmp
+logs
+*.log
+.DS_Store
+coverage
+.nyc_output
+.eslintcache
+.git
+.github
