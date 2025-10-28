@@ -9,11 +9,11 @@
     }
   ],
   "functions": {
-    "api/test.ts": {
+    "api/reflections-simple.ts": {
       "memory": 1024,
       "maxDuration": 10
     },
-    "api/reflections-simple.ts": {
+    "api/analyze/voice.ts": {
       "memory": 1024,
       "maxDuration": 10
     }
