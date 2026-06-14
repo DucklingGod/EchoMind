@@ -17,9 +17,7 @@ export function DesktopNav() {
     <nav className="hidden md:flex fixed top-0 left-0 right-0 bg-card/95 backdrop-blur-lg border-b border-border z-50 px-8 h-16">
       <div className="max-w-6xl mx-auto w-full flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-accent flex items-center justify-center">
-            <span className="text-white font-bold text-sm">E</span>
-          </div>
+          <img src="/echomind-logo.png" alt="EchoMind" className="w-8 h-8 rounded-lg object-cover" />
           <span className="text-xl font-semibold text-foreground">EchoMind</span>
         </div>
 
