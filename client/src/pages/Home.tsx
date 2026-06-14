@@ -135,7 +135,7 @@ export default function Home() {
       const response = await fetch("/api/reflections", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ inputText: inputToSend, voice: wasVoiceInput }),
+        body: JSON.stringify({ inputText: inputToSend, voice: wasVoiceInput, model: localStorage.getItem("echomind-model") || "gpt-4o-mini" }),
       });
 
       if (!response.ok) {
@@ -199,6 +199,31 @@ export default function Home() {
         </div>
 
         <MindwaveAnimation isActive={isRecording || input.length > 0} intensity={intensity} />
+
+        {!input && !currentReflection && (
+          <div className="space-y-2">
+            <p className="text-xs font-medium text-muted-foreground text-center uppercase tracking-wide">
+              Try a prompt
+            </p>
+            <div className="flex flex-wrap gap-2 justify-center">
+              {[
+                "What am I grateful for today?",
+                "What's weighing on my mind?",
+                "One thing that made me smile today",
+                "What would I tell my past self?",
+                "How am I really feeling right now?",
+              ].map((prompt) => (
+                <button
+                  key={prompt}
+                  onClick={() => setInput(prompt)}
+                  className="px-3 py-1.5 text-xs rounded-full bg-primary/5 text-primary hover:bg-primary/10 border border-primary/20 transition-colors"
+                >
+                  {prompt}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="space-y-4">
           <div className="relative">

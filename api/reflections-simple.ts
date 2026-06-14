@@ -35,6 +35,7 @@ const reflections = pgTable("reflections", {
 const insertReflectionSchema = z.object({
   inputText: z.string().min(1, "Please share what's on your mind"),
   voice: z.boolean().default(false),
+  model: z.string().optional().default("gpt-4o-mini"),
 });
 
 // ── DB ──────────────────────────────────────────────
@@ -79,15 +80,16 @@ You MUST: 1) Acknowledge their pain with deep empathy 2) Validate their feelings
 const SYSTEM_PROMPT = `You are EchoMind, a concise, compassionate reflection assistant.
 Goals: 1) Identify the primary emotion 2) Reflect and validate feelings 3) Reframe with agency 4) Suggest 1-3 tiny actionable steps.
 Constraints: Under 140 words, plain language, never diagnose, calm and non-judgmental.
+When recent emotions are provided, reference them naturally (e.g., '上次你提到...' or 'Last time you felt...'). Show you remember.
 Available emotions: Joy, Calm, Anxious, Sad, Angry, Confused, Mixed
 Output JSON: {"emotion":"...","summary":"...","reframe":"...","actions":["..."]}`;
 
-async function analyzeReflection(inputText: string, recentEmotions: string[] = [], isCrisis = false) {
+async function analyzeReflection(inputText: string, recentEmotions: string[] = [], isCrisis = false, model = "gpt-4o-mini") {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const context = recentEmotions.length > 0 ? `\nRecent emotions: ${recentEmotions.join(", ")}` : "";
   const crisisNote = isCrisis ? getCrisisPrompt() : "";
   const response = await openai.chat.completions.create({
-    model: "gpt-4o",
+    model: model,
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: `User's reflection: """${inputText}"""${context}${crisisNote}\n\nRespond as JSON only.` },
@@ -123,7 +125,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         database = getDb();
         // Ensure default user exists
         await database.insert(users).values({ id: "default-user", plan: "free" }).onConflictDoNothing();
-        const recent = await database.select().from(reflections).where(eq(reflections.userId, "default-user")).orderBy(desc(reflections.createdAt)).limit(3);
+        const recent = await database.select().from(reflections).where(eq(reflections.userId, "default-user")).orderBy(desc(reflections.createdAt)).limit(7);
         recentEmotions = recent.map((r: any) => r.emotion);
       } catch (e) {
         console.log("DB init error:", e);
@@ -133,7 +135,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       let analysis;
       const isCrisis = detectCrisisServer(body.inputText);
       try {
-        analysis = await analyzeReflection(body.inputText, recentEmotions, isCrisis);
+        analysis = await analyzeReflection(body.inputText, recentEmotions, isCrisis, body.model);
       } catch (e) {
         console.log("AI analysis failed:", e);
         analysis = {

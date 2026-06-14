@@ -8,7 +8,7 @@ import { useEncryption } from "@/components/EncryptionProvider";
 import { Download, Moon, Sun, Shield, Info, Lock, AlertTriangle } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { Reflection } from "@shared/schema";
 
 export default function Settings() {
@@ -17,6 +17,7 @@ export default function Settings() {
   const { isEnabled, hasPassphrase, enableEncryption, disableEncryption, updatePassphrase } = useEncryption();
   const [passphrase, setPassphrase] = useState("");
   const [showPassphrase, setShowPassphrase] = useState(false);
+  const [aiModel, setAiModel] = useState(() => localStorage.getItem("echomind-model") || "gpt-4o-mini");
 
   const { data: reflections = [] } = useQuery<Reflection[]>({
     queryKey: ["/api/reflections"],
@@ -90,6 +91,47 @@ export default function Settings() {
         </div>
 
         <div className="space-y-6">
+          <Card className="p-6 space-y-6">
+            <div>
+              <h2 className="text-lg font-medium text-foreground mb-1">AI Model</h2>
+              <p className="text-sm text-muted-foreground">
+                Choose the AI model for reflections
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              {[
+                { id: "gpt-4o-mini", name: "GPT-4o Mini", desc: "Fast & affordable — great for daily check-ins", cost: "$" },
+                { id: "gpt-4o", name: "GPT-4o", desc: "Most capable — deeper emotional analysis", cost: "$$$" },
+              ].map((m) => (
+                <button
+                  key={m.id}
+                  onClick={() => { setAiModel(m.id); localStorage.setItem("echomind-model", m.id); }}
+                  className={`w-full flex items-center gap-3 p-4 rounded-xl border transition-all text-left ${
+                    aiModel === m.id
+                      ? "border-primary bg-primary/5"
+                      : "border-border hover:border-primary/50"
+                  }`}
+                >
+                  <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
+                    aiModel === m.id ? "bg-primary/20" : "bg-muted"
+                  }`}>
+                    <span className="text-sm font-bold">{m.cost}</span>
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-foreground">{m.name}</p>
+                    <p className="text-xs text-muted-foreground">{m.desc}</p>
+                  </div>
+                  {aiModel === m.id && (
+                    <div className="w-5 h-5 rounded-full bg-primary flex items-center justify-center">
+                      <div className="w-2 h-2 rounded-full bg-white" />
+                    </div>
+                  )}
+                </button>
+              ))}
+            </div>
+          </Card>
+
           <Card className="p-6 space-y-6">
             <div>
               <h2 className="text-lg font-medium text-foreground mb-1">Appearance</h2>

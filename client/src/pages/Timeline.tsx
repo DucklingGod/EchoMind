@@ -115,6 +115,100 @@ export default function Timeline() {
               <MoodSparkline reflections={reflections} />
             </div>
 
+            {/* Mood Analytics */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {(() => {
+                const emotionCounts: Record<string, number> = {};
+                reflections.forEach(r => {
+                  emotionCounts[r.emotion] = (emotionCounts[r.emotion] || 0) + 1;
+                });
+                const topEmotion = Object.entries(emotionCounts).sort((a, b) => b[1] - a[1])[0];
+                const emotionColors: Record<string, string> = {
+                  Joy: "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400",
+                  Calm: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+                  Anxious: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
+                  Sad: "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400",
+                  Angry: "bg-red-500/10 text-red-600 dark:text-red-400",
+                  Confused: "bg-purple-500/10 text-purple-600 dark:text-purple-400",
+                  Mixed: "bg-gray-500/10 text-gray-600 dark:text-gray-400",
+                };
+                const emotionEmoji: Record<string, string> = {
+                  Joy: "😊", Calm: "😌", Anxious: "😰", Sad: "😢",
+                  Angry: "😠", Confused: "🤔", Mixed: "🎭",
+                };
+                return (
+                  <>
+                    <div className="p-4 rounded-xl bg-primary/5 border border-primary/20 text-center">
+                      <p className="text-2xl font-bold text-foreground">{reflections.length}</p>
+                      <p className="text-xs text-muted-foreground">Total</p>
+                    </div>
+                    <div className={`p-4 rounded-xl text-center ${topEmotion ? emotionColors[topEmotion[0]] || "bg-muted" : "bg-muted"}`}>
+                      <p className="text-2xl">{topEmotion ? emotionEmoji[topEmotion[0]] || "📊" : "📊"}</p>
+                      <p className="text-xs font-medium">{topEmotion ? topEmotion[0] : "N/A"}</p>
+                      <p className="text-xs text-muted-foreground">Most frequent</p>
+                    </div>
+                    <div className="p-4 rounded-xl bg-primary/5 border border-primary/20 text-center">
+                      <p className="text-2xl font-bold text-foreground">
+                        {reflections.filter(r => r.voice).length}
+                      </p>
+                      <p className="text-xs text-muted-foreground">Voice entries</p>
+                    </div>
+                    <div className="p-4 rounded-xl bg-primary/5 border border-primary/20 text-center">
+                      <p className="text-2xl font-bold text-foreground">
+                        {Object.keys(emotionCounts).length}
+                      </p>
+                      <p className="text-xs text-muted-foreground">Emotion types</p>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+
+            {/* Emotion Breakdown Bar */}
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Emotion Breakdown</p>
+              <div className="flex h-3 rounded-full overflow-hidden bg-muted">
+                {(() => {
+                  const emotionCounts: Record<string, number> = {};
+                  reflections.forEach(r => {
+                    emotionCounts[r.emotion] = (emotionCounts[r.emotion] || 0) + 1;
+                  });
+                  const barColors: Record<string, string> = {
+                    Joy: "bg-yellow-500", Calm: "bg-blue-500", Anxious: "bg-orange-500",
+                    Sad: "bg-indigo-500", Angry: "bg-red-500", Confused: "bg-purple-500", Mixed: "bg-gray-500",
+                  };
+                  return Object.entries(emotionCounts).map(([emotion, count]) => (
+                    <div
+                      key={emotion}
+                      className={`${barColors[emotion] || "bg-gray-500"} transition-all`}
+                      style={{ width: `${(count / reflections.length) * 100}%` }}
+                      title={`${emotion}: ${count} (${Math.round((count / reflections.length) * 100)}%)`}
+                    />
+                  ));
+                })()}
+              </div>
+              <div className="flex flex-wrap gap-3">
+                {(() => {
+                  const emotionCounts: Record<string, number> = {};
+                  reflections.forEach(r => {
+                    emotionCounts[r.emotion] = (emotionCounts[r.emotion] || 0) + 1;
+                  });
+                  const dotColors: Record<string, string> = {
+                    Joy: "bg-yellow-500", Calm: "bg-blue-500", Anxious: "bg-orange-500",
+                    Sad: "bg-indigo-500", Angry: "bg-red-500", Confused: "bg-purple-500", Mixed: "bg-gray-500",
+                  };
+                  return Object.entries(emotionCounts)
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([emotion, count]) => (
+                      <span key={emotion} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <span className={`w-2 h-2 rounded-full ${dotColors[emotion] || "bg-gray-500"}`} />
+                        {emotion} {Math.round((count / reflections.length) * 100)}%
+                      </span>
+                    ));
+                })()}
+              </div>
+            </div>
+
             <div className="space-y-6">
               <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
                 Recent Reflections
