@@ -4,6 +4,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { MindwaveAnimation } from "@/components/MindwaveAnimation";
 import { ReflectionCard } from "@/components/ReflectionCard";
 import { CrisisModal } from "@/components/CrisisModal";
+import { ChatView } from "@/components/ChatView";
 import { detectCrisis, type CrisisMatch } from "@/lib/crisisDetection";
 import { Mic, MicOff, Send, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
@@ -284,8 +285,12 @@ export default function Home() {
         </div>
 
         {currentReflection && (
-          <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+          <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 space-y-4">
             <ReflectionCard reflection={currentReflection} />
+            <ChatView
+              initialContext={currentReflection.inputText + "\n\nAI Response: " + currentReflection.summary + " " + currentReflection.reframe}
+              onClose={() => {}}
+            />
           </div>
         )}
 
