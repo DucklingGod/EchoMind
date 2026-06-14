@@ -1,7 +1,79 @@
-import { VercelRequest, VercelResponse } from '@vercel/node';
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { neon } from '@neondatabase/serverless';
+import { drizzle } from 'drizzle-orm/neon-http';
+import { eq, desc } from 'drizzle-orm';
+import { pgTable, text, timestamp, jsonb, boolean, real } from 'drizzle-orm/pg-core';
+import { z } from 'zod';
+import OpenAI from 'openai';
+import { randomUUID } from 'crypto';
 
+// ── Schema ──────────────────────────────────────────
+const emotionEnum = z.enum(["Joy", "Calm", "Anxious", "Sad", "Angry", "Confused", "Mixed"]);
+type Emotion = z.infer<typeof emotionEnum>;
+
+const users = pgTable("users", {
+  id: text("id").primaryKey(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  plan: text("plan").notNull().default("free"),
+  settings: jsonb("settings"),
+});
+
+const reflections = pgTable("reflections", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  inputText: text("input_text").notNull(),
+  emotion: text("emotion").notNull(),
+  summary: text("summary").notNull(),
+  reframe: text("reframe").notNull(),
+  actions: text("actions").array().notNull(),
+  voice: boolean("voice").notNull().default(false),
+  sentiment: real("sentiment"),
+  energy: real("energy"),
+});
+
+const insertReflectionSchema = z.object({
+  inputText: z.string().min(1, "Please share what's on your mind"),
+  voice: z.boolean().default(false),
+});
+
+// ── DB ──────────────────────────────────────────────
+let db: ReturnType<typeof drizzle> | null = null;
+function getDb() {
+  if (db) return db;
+  const url = process.env.DATABASE_URL;
+  if (!url) throw new Error("DATABASE_URL not set");
+  const sql = neon(url);
+  db = drizzle(sql);
+  return db;
+}
+
+// ── LLM ─────────────────────────────────────────────
+const SYSTEM_PROMPT = `You are EchoMind, a concise, compassionate reflection assistant.
+Goals: 1) Identify the primary emotion 2) Reflect and validate feelings 3) Reframe with agency 4) Suggest 1-3 tiny actionable steps.
+Constraints: Under 140 words, plain language, never diagnose, calm and non-judgmental.
+Available emotions: Joy, Calm, Anxious, Sad, Angry, Confused, Mixed
+Output JSON: {"emotion":"...","summary":"...","reframe":"...","actions":["..."]}`;
+
+async function analyzeReflection(inputText: string, recentEmotions: string[] = []) {
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const context = recentEmotions.length > 0 ? `\nRecent emotions: ${recentEmotions.join(", ")}` : "";
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o",
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: `User's reflection: """${inputText}"""${context}\n\nRespond as JSON only.` },
+    ],
+    response_format: { type: "json_object" },
+    max_completion_tokens: 500,
+  });
+  const content = response.choices[0].message.content;
+  if (!content) throw new Error("Empty AI response");
+  return JSON.parse(content);
+}
+
+// ── Handler ─────────────────────────────────────────
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Enable CORS
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
@@ -14,106 +86,87 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     if (req.method === 'POST') {
-      // Try to use the real database, fallback to mock if it fails
+      const body = insertReflectionSchema.parse(req.body);
+
+      // Get recent emotions
+      let recentEmotions: string[] = [];
+      let database;
       try {
-        const { storage } = await import("./storage");
-        const { analyzeReflection } = await import("./llm");
-        const { insertReflectionSchema } = await import("../shared/schema");
-        
-        // Initialize storage
-        if (storage.initialize) {
-          await storage.initialize();
-        }
-        
-        const body = insertReflectionSchema.parse(req.body);
-        
-        // Get recent emotions for context
-        let recentEmotions = [];
-        try {
-          const recentReflections = await storage.getReflections("default-user");
-          recentEmotions = recentReflections.slice(0, 3).map(r => r.emotion);
-        } catch (error) {
-          console.log("Could not fetch recent reflections:", error);
-        }
+        database = getDb();
+        // Ensure default user exists
+        await database.insert(users).values({ id: "default-user", plan: "free" }).onConflictDoNothing();
+        const recent = await database.select().from(reflections).where(eq(reflections.userId, "default-user")).orderBy(desc(reflections.createdAt)).limit(3);
+        recentEmotions = recent.map((r: any) => r.emotion);
+      } catch (e) {
+        console.log("DB init error:", e);
+      }
 
-        // Analyze with AI
-        let analysis;
-        try {
-          analysis = await analyzeReflection(body.inputText, recentEmotions);
-        } catch (error) {
-          console.log("AI analysis failed, using fallback:", error);
-          analysis = {
-            emotion: "Mixed" as const,
-            summary: "I'm processing what you shared. Your feelings are valid and important.",
-            reframe: "Taking time to reflect is a meaningful step toward understanding yourself better.",
-            actions: [
-              "Take a few deep breaths",
-              "Note one thing you're grateful for",
-              "Take a short walk or stretch"
-            ],
-          };
-        }
-
-        // Create reflection in database
-        const reflection = await storage.createReflection("default-user", {
-          inputText: body.inputText,
-          emotion: analysis.emotion,
-          summary: analysis.summary,
-          reframe: analysis.reframe,
-          actions: analysis.actions,
-          voice: body.voice,
-          sentiment: null,
-          energy: null,
-        });
-
-        res.status(200).json(reflection);
-      } catch (dbError) {
-        console.log("Database error, using mock response:", dbError);
-        
-        // Fallback to mock response
-        const mockReflection = {
-          id: "mock-" + Date.now(),
-          userId: "default-user",
-          inputText: req.body?.inputText || "Test input",
+      // AI analysis
+      let analysis;
+      try {
+        analysis = await analyzeReflection(body.inputText, recentEmotions);
+      } catch (e) {
+        console.log("AI analysis failed:", e);
+        analysis = {
           emotion: "Mixed",
           summary: "I'm processing what you shared. Your feelings are valid and important.",
           reframe: "Taking time to reflect is a meaningful step toward understanding yourself better.",
-          actions: [
-            "Take a few deep breaths",
-            "Note one thing you're grateful for",
-            "Take a short walk or stretch"
-          ],
-          voice: req.body?.voice || false,
-          sentiment: null,
-          energy: null,
-          createdAt: new Date().toISOString()
+          actions: ["Take a few deep breaths", "Note one thing you're grateful for", "Take a short walk or stretch"],
         };
-
-        res.status(200).json(mockReflection);
       }
-    } else if (req.method === 'GET') {
-      // Try to get real reflections, fallback to empty array
-      try {
-        const { storage } = await import("./storage");
-        
-        if (storage.initialize) {
-          await storage.initialize();
+
+      // Save to DB
+      if (database) {
+        try {
+          const id = randomUUID();
+          const result = await database.insert(reflections).values({
+            id,
+            userId: "default-user",
+            inputText: body.inputText,
+            emotion: analysis.emotion,
+            summary: analysis.summary,
+            reframe: analysis.reframe,
+            actions: analysis.actions,
+            voice: body.voice ?? false,
+            sentiment: null,
+            energy: null,
+          }).returning();
+          res.status(200).json(result[0]);
+          return;
+        } catch (e) {
+          console.log("DB insert error:", e);
         }
-        
-        const reflections = await storage.getReflections("default-user");
-        res.status(200).json(reflections);
-      } catch (dbError) {
-        console.log("Database error, returning empty array:", dbError);
+      }
+
+      // Fallback if DB insert failed
+      res.status(200).json({
+        id: "local-" + Date.now(),
+        userId: "default-user",
+        inputText: body.inputText,
+        emotion: analysis.emotion,
+        summary: analysis.summary,
+        reframe: analysis.reframe,
+        actions: analysis.actions,
+        voice: body.voice ?? false,
+        sentiment: null,
+        energy: null,
+        createdAt: new Date().toISOString(),
+      });
+
+    } else if (req.method === 'GET') {
+      try {
+        const database = getDb();
+        const data = await database.select().from(reflections).where(eq(reflections.userId, "default-user")).orderBy(desc(reflections.createdAt));
+        res.status(200).json(data);
+      } catch (e) {
+        console.log("DB read error:", e);
         res.status(200).json([]);
       }
     } else {
       res.status(405).json({ error: 'Method not allowed' });
     }
   } catch (error) {
-    console.error("Error in reflections API:", error);
-    res.status(500).json({
-      error: "Internal server error",
-      message: error instanceof Error ? error.message : "Unknown error",
-    });
+    console.error("Handler error:", error);
+    res.status(500).json({ error: "Internal server error", message: error instanceof Error ? error.message : "Unknown error" });
   }
 }
