@@ -48,6 +48,33 @@ function getDb() {
   return db;
 }
 
+// ── Crisis Detection (server-side safety net) ───────
+const CRISIS_PATTERNS = [
+  /(?:want|going|plan|think)\s*(?:to)?\s*(?:die|kill\s*(?:my)?self|end\s*(?:it|my\s*life))/i,
+  /(?:ไม่อยาก(?:อยู่|มีชีวิต)|อยากตาย|ฆ่าตัวตาย|คิดสั้น|จบชีวิต)/i,
+  /(?:better\s*off\s*(?:dead|without\s*me)|no\s*(?:reason|point)\s*(?:to)?\s*(?:live|go\s*on))/i,
+  /(?:hurt|cut|burn|harm)\s*(?:my)?self/i,
+  /(?:ทำร้าย|ตัด|กรีด)\s*(?:ตัว)?เอง/i,
+  /(?:self[\s-]?harm|overdose|กินยาเกินขนาด)/i,
+  /(?:hopeless|สิ้นหวัง|หมดหวัง|ไม่มีทางออก)/i,
+  /(?:can'?t\s*(?:take|handle|cope)\s*(?:it|this|anymore)|ทน(ไม่)?ไหว)/i,
+  /(?:nobody\s*(?:cares|would\s*miss)\s*me|ไม่มีใคร(?:รัก|สน|แคร์))/i,
+  /(?:trapped|stuck|ติดกับ|ไม่มีทางออก|no\s*way\s*out)/i,
+];
+
+function detectCrisisServer(text: string): boolean {
+  return CRISIS_PATTERNS.some(p => p.test(text));
+}
+
+function getCrisisPrompt(): string {
+  return `
+
+SAFETY ALERT: The user's message contains indicators of emotional crisis.
+You MUST: 1) Acknowledge their pain with deep empathy 2) Validate their feelings
+3) Gently encourage contacting a crisis helpline 4) Do NOT diagnose or minimize
+5) End with hope and resources: Thailand สายด่วนสุขภาพจิต 1323, Samaritans 02-713-6793, US 988 Lifeline.`;
+}
+
 // ── LLM ─────────────────────────────────────────────
 const SYSTEM_PROMPT = `You are EchoMind, a concise, compassionate reflection assistant.
 Goals: 1) Identify the primary emotion 2) Reflect and validate feelings 3) Reframe with agency 4) Suggest 1-3 tiny actionable steps.
@@ -55,14 +82,15 @@ Constraints: Under 140 words, plain language, never diagnose, calm and non-judgm
 Available emotions: Joy, Calm, Anxious, Sad, Angry, Confused, Mixed
 Output JSON: {"emotion":"...","summary":"...","reframe":"...","actions":["..."]}`;
 
-async function analyzeReflection(inputText: string, recentEmotions: string[] = []) {
+async function analyzeReflection(inputText: string, recentEmotions: string[] = [], isCrisis = false) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const context = recentEmotions.length > 0 ? `\nRecent emotions: ${recentEmotions.join(", ")}` : "";
+  const crisisNote = isCrisis ? getCrisisPrompt() : "";
   const response = await openai.chat.completions.create({
     model: "gpt-4o",
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: `User's reflection: """${inputText}"""${context}\n\nRespond as JSON only.` },
+      { role: "user", content: `User's reflection: """${inputText}"""${context}${crisisNote}\n\nRespond as JSON only.` },
     ],
     response_format: { type: "json_object" },
     max_completion_tokens: 500,
@@ -101,10 +129,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         console.log("DB init error:", e);
       }
 
-      // AI analysis
+      // AI analysis — check for crisis on server side too
       let analysis;
+      const isCrisis = detectCrisisServer(body.inputText);
       try {
-        analysis = await analyzeReflection(body.inputText, recentEmotions);
+        analysis = await analyzeReflection(body.inputText, recentEmotions, isCrisis);
       } catch (e) {
         console.log("AI analysis failed:", e);
         analysis = {

@@ -3,6 +3,8 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { MindwaveAnimation } from "@/components/MindwaveAnimation";
 import { ReflectionCard } from "@/components/ReflectionCard";
+import { CrisisModal } from "@/components/CrisisModal";
+import { detectCrisis, type CrisisMatch } from "@/lib/crisisDetection";
 import { Mic, MicOff, Send, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useVoiceRecording } from "@/hooks/useVoiceRecording";
@@ -16,6 +18,8 @@ export default function Home() {
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [wasVoiceInput, setWasVoiceInput] = useState(false);
   const [currentReflection, setCurrentReflection] = useState<Reflection | null>(null);
+  const [crisisMatch, setCrisisMatch] = useState<CrisisMatch | null>(null);
+  const [showCrisisModal, setShowCrisisModal] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { toast } = useToast();
   const { isRecording, audioBlob, startRecording, stopRecording, clearRecording } = useVoiceRecording();
@@ -96,8 +100,18 @@ export default function Home() {
     }
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (bypassCrisis = false) => {
     if (!input.trim()) return;
+
+    // Crisis detection check
+    if (!bypassCrisis) {
+      const crisis = detectCrisis(input);
+      if (crisis) {
+        setCrisisMatch(crisis);
+        setShowCrisisModal(true);
+        return; // Pause — let user decide via modal
+      }
+    }
 
     if (encryptionEnabled && !hasPassphrase) {
       toast({
@@ -161,6 +175,19 @@ export default function Home() {
 
   return (
     <div className="min-h-screen pb-20 md:pb-8 md:pt-16">
+      <CrisisModal
+        isOpen={showCrisisModal}
+        onClose={() => {
+          setShowCrisisModal(false);
+          setCrisisMatch(null);
+        }}
+        onContinue={() => {
+          setShowCrisisModal(false);
+          handleSubmit(true); // Bypass crisis check and proceed
+        }}
+        crisis={crisisMatch}
+      />
+
       <div className="max-w-3xl mx-auto px-4 py-8 md:py-12 space-y-8">
         <div className="text-center space-y-2 mb-8">
           <h1 className="text-3xl md:text-4xl font-semibold text-foreground">
