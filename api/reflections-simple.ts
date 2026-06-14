@@ -6,6 +6,7 @@ import { pgTable, text, timestamp, jsonb, boolean, real } from 'drizzle-orm/pg-c
 import { z } from 'zod';
 import OpenAI from 'openai';
 import { randomUUID } from 'crypto';
+import { getUserIdFromRequest } from './auth';
 
 // ── Schema ──────────────────────────────────────────
 const emotionEnum = z.enum(["Joy", "Calm", "Anxious", "Sad", "Angry", "Confused", "Mixed"]);
@@ -107,25 +108,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
-  res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
+  res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization');
 
   if (req.method === 'OPTIONS') {
     res.status(200).end();
     return;
   }
 
+  // Extract real user ID from Clerk JWT
+  const userId = await getUserIdFromRequest(req);
+
   try {
     if (req.method === 'POST') {
       const body = insertReflectionSchema.parse(req.body);
 
-      // Get recent emotions
+      // Get recent emotions for THIS user
       let recentEmotions: string[] = [];
       let database;
       try {
         database = getDb();
-        // Ensure default user exists
-        await database.insert(users).values({ id: "default-user", plan: "free" }).onConflictDoNothing();
-        const recent = await database.select().from(reflections).where(eq(reflections.userId, "default-user")).orderBy(desc(reflections.createdAt)).limit(7);
+        // Ensure this user exists
+        await database.insert(users).values({ id: userId, plan: "free" }).onConflictDoNothing();
+        const recent = await database.select().from(reflections).where(eq(reflections.userId, userId)).orderBy(desc(reflections.createdAt)).limit(7);
         recentEmotions = recent.map((r: any) => r.emotion);
       } catch (e) {
         console.log("DB init error:", e);
@@ -146,13 +150,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         };
       }
 
-      // Save to DB
+      // Save to DB with REAL userId
       if (database) {
         try {
           const id = randomUUID();
           const result = await database.insert(reflections).values({
             id,
-            userId: "default-user",
+            userId: userId,
             inputText: body.inputText,
             emotion: analysis.emotion,
             summary: analysis.summary,
@@ -172,7 +176,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Fallback if DB insert failed
       res.status(200).json({
         id: "local-" + Date.now(),
-        userId: "default-user",
+        userId: userId,
         inputText: body.inputText,
         emotion: analysis.emotion,
         summary: analysis.summary,
@@ -185,9 +189,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
 
     } else if (req.method === 'GET') {
+      // Return reflections for THIS user only
       try {
         const database = getDb();
-        const data = await database.select().from(reflections).where(eq(reflections.userId, "default-user")).orderBy(desc(reflections.createdAt));
+        const data = await database.select().from(reflections).where(eq(reflections.userId, userId)).orderBy(desc(reflections.createdAt));
         res.status(200).json(data);
       } catch (e) {
         console.log("DB read error:", e);

@@ -1,5 +1,5 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient } from "@/lib/queryClient";
+import { queryClient, apiRequest } from "@/lib/queryClient";
 import { ReflectionCard } from "@/components/ReflectionCard";
 import { MoodStreak } from "@/components/MoodStreak";
 import { MoodSparkline } from "@/components/MoodSparkline";
@@ -29,10 +29,7 @@ export default function Timeline() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      const response = await fetch(`/api/reflections/${id}`, {
-        method: "DELETE",
-      });
-      if (!response.ok) throw new Error("Failed to delete");
+      const response = await apiRequest("DELETE", `/api/reflections/${id}`);
       return response.json();
     },
     onSuccess: () => {
@@ -53,10 +50,7 @@ export default function Timeline() {
 
   const deleteAllMutation = useMutation({
     mutationFn: async () => {
-      const response = await fetch("/api/reflections/all", {
-        method: "DELETE",
-      });
-      if (!response.ok) throw new Error("Failed to delete all");
+      const response = await apiRequest("DELETE", "/api/reflections/all");
       return response.json();
     },
     onSuccess: () => {

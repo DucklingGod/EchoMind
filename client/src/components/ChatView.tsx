@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Send, Loader2, Bot, User, X, MessageCircle } from "lucide-react";
+import { useAuthenticatedFetch } from "@/lib/authFetch";
 
 interface Message {
   role: "user" | "assistant";
@@ -9,7 +10,7 @@ interface Message {
 }
 
 interface ChatViewProps {
-  initialContext?: string; // The initial reflection text to start the conversation
+  initialContext?: string;
   onClose: () => void;
 }
 
@@ -20,24 +21,21 @@ export function ChatView({ initialContext, onClose }: ChatViewProps) {
   const [isOpen, setIsOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const { authFetch } = useAuthenticatedFetch();
 
-  // Auto-scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Focus input when opened
   useEffect(() => {
     if (isOpen) {
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   }, [isOpen]);
 
-  // Auto-open if there's initial context
   useEffect(() => {
     if (initialContext && messages.length === 0) {
       setIsOpen(true);
-      // Add a greeting based on the initial reflection
       setMessages([{
         role: "assistant",
         content: "I'd love to explore this further with you. What part of this feels most important to you right now?",
@@ -57,14 +55,13 @@ export function ChatView({ initialContext, onClose }: ChatViewProps) {
     try {
       const model = localStorage.getItem("echomind-model") || "gpt-4o-mini";
 
-      // Build conversation history for the API
       const conversationHistory: Message[] = [];
       if (initialContext) {
         conversationHistory.push({ role: "user", content: `I was reflecting on this: "${initialContext}"` });
       }
       conversationHistory.push(...newMessages);
 
-      const response = await fetch("/api/chat", {
+      const response = await authFetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: conversationHistory, model }),
@@ -105,7 +102,6 @@ export function ChatView({ initialContext, onClose }: ChatViewProps) {
 
   return (
     <div className="border border-border rounded-2xl bg-card/50 backdrop-blur-md overflow-hidden">
-      {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-card/80">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
@@ -126,7 +122,6 @@ export function ChatView({ initialContext, onClose }: ChatViewProps) {
         </Button>
       </div>
 
-      {/* Messages */}
       <div className="h-72 overflow-y-auto p-4 space-y-4">
         {messages.map((msg, i) => (
           <div
@@ -173,7 +168,6 @@ export function ChatView({ initialContext, onClose }: ChatViewProps) {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input */}
       <div className="p-3 border-t border-border bg-card/80">
         <div className="flex gap-2">
           <Input

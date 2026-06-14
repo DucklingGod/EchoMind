@@ -2,10 +2,13 @@ import { Link, useLocation } from "wouter";
 import { Home, Clock, Settings, Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTheme } from "./ThemeProvider";
+import { UserButton } from "@clerk/clerk-react";
 
 export function DesktopNav() {
   const [location] = useLocation();
   const { theme, toggleTheme } = useTheme();
+
+  const CLERK_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
 
   const navItems = [
     { path: "/", icon: Home, label: "Home" },
@@ -54,6 +57,19 @@ export function DesktopNav() {
               <Sun className="w-4 h-4" />
             )}
           </Button>
+
+          {CLERK_KEY && (
+            <div className="ml-2">
+              <UserButton
+                afterSignOutUrl="/"
+                appearance={{
+                  elements: {
+                    avatarBox: "w-8 h-8",
+                  },
+                }}
+              />
+            </div>
+          )}
         </div>
       </div>
     </nav>

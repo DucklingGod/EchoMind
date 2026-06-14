@@ -6,6 +6,7 @@ import { ReflectionCard } from "@/components/ReflectionCard";
 import { CrisisModal } from "@/components/CrisisModal";
 import { ChatView } from "@/components/ChatView";
 import { detectCrisis, type CrisisMatch } from "@/lib/crisisDetection";
+import { useAuthenticatedFetch } from "@/lib/authFetch";
 import { Mic, MicOff, Send, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useVoiceRecording } from "@/hooks/useVoiceRecording";
@@ -25,6 +26,7 @@ export default function Home() {
   const { toast } = useToast();
   const { isRecording, audioBlob, startRecording, stopRecording, clearRecording } = useVoiceRecording();
   const { isEnabled: encryptionEnabled, passphrase, hasPassphrase } = useEncryption();
+  const { authFetch } = useAuthenticatedFetch();
 
   const intensity = input.length / 100;
 
@@ -70,7 +72,7 @@ export default function Home() {
       const formData = new FormData();
       formData.append("audio", audioBlob, "recording.webm");
 
-      const transcribeResponse = await fetch("/api/analyze/voice", {
+      const transcribeResponse = await authFetch("/api/analyze/voice", {
         method: "POST",
         body: formData,
       });
@@ -133,7 +135,7 @@ export default function Home() {
         inputToSend = await encrypt(input, passphrase);
       }
 
-      const response = await fetch("/api/reflections", {
+      const response = await authFetch("/api/reflections", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ inputText: inputToSend, voice: wasVoiceInput, model: localStorage.getItem("echomind-model") || "gpt-4o-mini" }),
@@ -153,7 +155,7 @@ export default function Home() {
       toast({
         title: "Reflection created",
         description: encryptionEnabled 
-          ? "Your encrypted reflection has been saved" 
+          ? "Your encrypted reflection has been saved"
           : "Your thoughts have been reflected",
       });
     } catch (error) {
