@@ -6,7 +6,41 @@ import { pgTable, text, timestamp, jsonb, boolean, real } from 'drizzle-orm/pg-c
 import { z } from 'zod';
 import OpenAI from 'openai';
 import { randomUUID } from 'crypto';
-import { getUserIdFromRequest } from './auth';
+
+// ── Auth Helper (inline to avoid module resolution issues) ──
+function base64UrlDecode(str: string): string {
+  const base64 = str.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+  return Buffer.from(padded, 'base64').toString('utf-8');
+}
+
+function extractClerkJwtUser(token: string): string | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const payload = JSON.parse(base64UrlDecode(parts[1]));
+    if (payload.sub && typeof payload.sub === 'string') {
+      return payload.sub;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function getUserIdFromRequest(req: VercelRequest): Promise<string> {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.slice(7);
+    const userId = extractClerkJwtUser(token);
+    if (userId) return userId;
+  }
+  const userIdHeader = req.headers['x-user-id'] as string;
+  if (userIdHeader && userIdHeader.startsWith('user_')) {
+    return userIdHeader;
+  }
+  return 'default-user';
+}
 
 // ── Schema ──────────────────────────────────────────
 const emotionEnum = z.enum(["Joy", "Calm", "Anxious", "Sad", "Angry", "Confused", "Mixed"]);
@@ -127,7 +161,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       let database;
       try {
         database = getDb();
-        // Ensure this user exists
         await database.insert(users).values({ id: userId, plan: "free" }).onConflictDoNothing();
         const recent = await database.select().from(reflections).where(eq(reflections.userId, userId)).orderBy(desc(reflections.createdAt)).limit(7);
         recentEmotions = recent.map((r: any) => r.emotion);
@@ -135,7 +168,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         console.log("DB init error:", e);
       }
 
-      // AI analysis — check for crisis on server side too
+      // AI analysis
       let analysis;
       const isCrisis = detectCrisisServer(body.inputText);
       try {
@@ -173,7 +206,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
       }
 
-      // Fallback if DB insert failed
       res.status(200).json({
         id: "local-" + Date.now(),
         userId: userId,
@@ -189,7 +221,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
 
     } else if (req.method === 'GET') {
-      // Return reflections for THIS user only
       try {
         const database = getDb();
         const data = await database.select().from(reflections).where(eq(reflections.userId, userId)).orderBy(desc(reflections.createdAt));

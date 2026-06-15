@@ -1,6 +1,7 @@
+import { useEffect } from "react";
 import { Switch, Route } from "wouter";
-import { ClerkProvider, SignedIn, SignedOut, SignIn, UserButton } from "@clerk/clerk-react";
-import { queryClient } from "./lib/queryClient";
+import { ClerkProvider, SignedIn, SignedOut, SignIn, useAuth } from "@clerk/clerk-react";
+import { queryClient, setClerkTokenGetter } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -14,6 +15,27 @@ import Settings from "@/pages/Settings";
 import NotFound from "@/pages/not-found";
 
 const CLERK_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
+
+// Bridge component: registers Clerk's getToken with queryClient
+function ClerkTokenBridge() {
+  const { getToken, isSignedIn } = useAuth();
+
+  useEffect(() => {
+    if (isSignedIn) {
+      setClerkTokenGetter(async () => {
+        try {
+          return await getToken();
+        } catch {
+          return null;
+        }
+      });
+    } else {
+      setClerkTokenGetter(null);
+    }
+  }, [getToken, isSignedIn]);
+
+  return null;
+}
 
 function Router() {
   return (
@@ -82,6 +104,7 @@ function App() {
   return (
     <ClerkProvider publishableKey={CLERK_KEY}>
       <QueryClientProvider client={queryClient}>
+        <ClerkTokenBridge />
         <ThemeProvider>
           <SignedOut>
             <SignInPage />

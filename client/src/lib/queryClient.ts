@@ -7,21 +7,22 @@ async function throwIfResNotOk(res: Response) {
   }
 }
 
-// Get Clerk session token from the global Clerk object
+// Module-level token getter — set by ClerkProvider
+let _clerkGetToken: (() => Promise<string | null>) | null = null;
+
+export function setClerkTokenGetter(getter: () => Promise<string | null>) {
+  _clerkGetToken = getter;
+}
+
 async function getClerkToken(): Promise<string | null> {
-  try {
-    const clerk = (window as any).__clerk;
-    if (clerk && clerk.session) {
-      return await clerk.session.getToken();
+  if (_clerkGetToken) {
+    try {
+      return await _clerkGetToken();
+    } catch {
+      return null;
     }
-    // Alternative: try Clerk global
-    if ((window as any).Clerk && (window as any).Clerk.session) {
-      return await (window as any).Clerk.session.getToken();
-    }
-    return null;
-  } catch {
-    return null;
   }
+  return null;
 }
 
 export async function apiRequest(
@@ -39,7 +40,6 @@ export async function apiRequest(
     method,
     headers,
     body: data ? JSON.stringify(data) : undefined,
-    credentials: "include",
   });
 
   await throwIfResNotOk(res);
@@ -59,7 +59,6 @@ export const getQueryFn: <T>(options: {
     }
 
     const res = await fetch(queryKey.join("/") as string, {
-      credentials: "include",
       headers,
     });
 
