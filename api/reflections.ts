@@ -1,108 +1,239 @@
-import express from 'express';
-import { storage } from "./storage";
-import { analyzeReflection } from "./llm";
-import { insertReflectionSchema } from "../shared/schema";
-import type { Emotion } from "../shared/schema";
-import { z } from "zod";
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { neon } from '@neondatabase/serverless';
+import { drizzle } from 'drizzle-orm/neon-http';
+import { eq, desc } from 'drizzle-orm';
+import { pgTable, text, timestamp, jsonb, boolean, real } from 'drizzle-orm/pg-core';
+import { z } from 'zod';
+import OpenAI from 'openai';
+import { randomUUID } from 'crypto';
 
-const app = express();
-app.use(express.json());
+// ── Auth Helper (inline to avoid module resolution issues) ──
+function base64UrlDecode(str: string): string {
+  const base64 = str.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+  return Buffer.from(padded, 'base64').toString('utf-8');
+}
 
-// Initialize storage once
-let initialized = false;
-async function ensureInitialized() {
-  if (!initialized && storage.initialize) {
-    await storage.initialize();
-    initialized = true;
+function extractClerkJwtUser(token: string): string | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const payload = JSON.parse(base64UrlDecode(parts[1]));
+    if (payload.sub && typeof payload.sub === 'string') {
+      return payload.sub;
+    }
+    return null;
+  } catch {
+    return null;
   }
 }
 
-const DEFAULT_USER_ID = "default-user";
+async function getUserIdFromRequest(req: VercelRequest): Promise<string> {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.slice(7);
+    const userId = extractClerkJwtUser(token);
+    if (userId) return userId;
+  }
+  const userIdHeader = req.headers['x-user-id'] as string;
+  if (userIdHeader && userIdHeader.startsWith('user_')) {
+    return userIdHeader;
+  }
+  return 'default-user';
+}
 
-// CORS middleware
-app.use((_req, res, next) => {
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
-  res.header('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
-  next();
+// ── Schema ──────────────────────────────────────────
+const emotionEnum = z.enum(["Joy", "Calm", "Anxious", "Sad", "Angry", "Confused", "Mixed"]);
+type Emotion = z.infer<typeof emotionEnum>;
+
+const users = pgTable("users", {
+  id: text("id").primaryKey(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  plan: text("plan").notNull().default("free"),
+  settings: jsonb("settings"),
 });
 
-app.post("/api/reflections", async (req, res) => {
+const reflections = pgTable("reflections", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  inputText: text("input_text").notNull(),
+  emotion: text("emotion").notNull(),
+  summary: text("summary").notNull(),
+  reframe: text("reframe").notNull(),
+  actions: text("actions").array().notNull(),
+  voice: boolean("voice").notNull().default(false),
+  sentiment: real("sentiment"),
+  energy: real("energy"),
+});
+
+const insertReflectionSchema = z.object({
+  inputText: z.string().min(1, "Please share what's on your mind"),
+  voice: z.boolean().default(false),
+  model: z.string().optional().default("gpt-4o-mini"),
+});
+
+// ── DB ──────────────────────────────────────────────
+let db: ReturnType<typeof drizzle> | null = null;
+function getDb() {
+  if (db) return db;
+  const url = process.env.DATABASE_URL;
+  if (!url) throw new Error("DATABASE_URL not set");
+  const sql = neon(url);
+  db = drizzle(sql);
+  return db;
+}
+
+// ── Crisis Detection (server-side safety net) ───────
+const CRISIS_PATTERNS = [
+  /(?:want|going|plan|think)\s*(?:to)?\s*(?:die|kill\s*(?:my)?self|end\s*(?:it|my\s*life))/i,
+  /(?:ไม่อยาก(?:อยู่|มีชีวิต)|อยากตาย|ฆ่าตัวตาย|คิดสั้น|จบชีวิต)/i,
+  /(?:better\s*off\s*(?:dead|without\s*me)|no\s*(?:reason|point)\s*(?:to)?\s*(?:live|go\s*on))/i,
+  /(?:hurt|cut|burn|harm)\s*(?:my)?self/i,
+  /(?:ทำร้าย|ตัด|กรีด)\s*(?:ตัว)?เอง/i,
+  /(?:self[\s-]?harm|overdose|กินยาเกินขนาด)/i,
+  /(?:hopeless|สิ้นหวัง|หมดหวัง|ไม่มีทางออก)/i,
+  /(?:can'?t\s*(?:take|handle|cope)\s*(?:it|this|anymore)|ทน(ไม่)?ไหว)/i,
+  /(?:nobody\s*(?:cares|would\s*miss)\s*me|ไม่มีใคร(?:รัก|สน|แคร์))/i,
+  /(?:trapped|stuck|ติดกับ|ไม่มีทางออก|no\s*way\s*out)/i,
+];
+
+function detectCrisisServer(text: string): boolean {
+  return CRISIS_PATTERNS.some(p => p.test(text));
+}
+
+function getCrisisPrompt(): string {
+  return `
+
+SAFETY ALERT: The user's message contains indicators of emotional crisis.
+You MUST: 1) Acknowledge their pain with deep empathy 2) Validate their feelings
+3) Gently encourage contacting a crisis helpline 4) Do NOT diagnose or minimize
+5) End with hope and resources: Thailand สายด่วนสุขภาพจิต 1323, Samaritans 02-713-6793, US 988 Lifeline.`;
+}
+
+// ── LLM ─────────────────────────────────────────────
+const SYSTEM_PROMPT = `You are EchoMind, a concise, compassionate reflection assistant.
+Goals: 1) Identify the primary emotion 2) Reflect and validate feelings 3) Reframe with agency 4) Suggest 1-3 tiny actionable steps.
+Constraints: Under 140 words, plain language, never diagnose, calm and non-judgmental.
+When recent emotions are provided, reference them naturally (e.g., '上次你提到...' or 'Last time you felt...'). Show you remember.
+Available emotions: Joy, Calm, Anxious, Sad, Angry, Confused, Mixed
+Output JSON: {"emotion":"...","summary":"...","reframe":"...","actions":["..."]}`;
+
+async function analyzeReflection(inputText: string, recentEmotions: string[] = [], isCrisis = false, model = "gpt-4o-mini") {
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const context = recentEmotions.length > 0 ? `\nRecent emotions: ${recentEmotions.join(", ")}` : "";
+  const crisisNote = isCrisis ? getCrisisPrompt() : "";
+  const response = await openai.chat.completions.create({
+    model: model,
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: `User's reflection: """${inputText}"""${context}${crisisNote}\n\nRespond as JSON only.` },
+    ],
+    response_format: { type: "json_object" },
+    max_completion_tokens: 500,
+  });
+  const content = response.choices[0].message.content;
+  if (!content) throw new Error("Empty AI response");
+  return JSON.parse(content);
+}
+
+// ── Handler ─────────────────────────────────────────
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
+  res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization');
+
+  if (req.method === 'OPTIONS') {
+    res.status(200).end();
+    return;
+  }
+
+  // Extract real user ID from Clerk JWT
+  const userId = await getUserIdFromRequest(req);
+
   try {
-    await ensureInitialized();
-    
-    const body = insertReflectionSchema.parse(req.body);
-    
-    let recentEmotions: Emotion[] = [];
-    try {
-      const recentReflections = await storage.getReflections(DEFAULT_USER_ID);
-      recentEmotions = recentReflections
-        .slice(0, 3)
-        .map(r => r.emotion as Emotion);
-    } catch (storageError) {
-      console.error("Failed to fetch recent reflections:", storageError);
-    }
+    if (req.method === 'POST') {
+      const body = insertReflectionSchema.parse(req.body);
 
-    let analysis;
-    try {
-      analysis = await analyzeReflection(body.inputText, recentEmotions);
-    } catch (error) {
-      console.error("AI analysis failed, using fallback:", error);
-      analysis = {
-        emotion: "Mixed" as const,
-        summary: "I'm processing what you shared. Your feelings are valid and important.",
-        reframe: "Taking time to reflect is a meaningful step toward understanding yourself better.",
-        actions: [
-          "Take a few deep breaths",
-          "Note one thing you're grateful for",
-          "Take a short walk or stretch"
-        ],
-      };
-    }
+      // Get recent emotions for THIS user
+      let recentEmotions: string[] = [];
+      let database;
+      try {
+        database = getDb();
+        await database.insert(users).values({ id: userId, plan: "free" }).onConflictDoNothing();
+        const recent = await database.select().from(reflections).where(eq(reflections.userId, userId)).orderBy(desc(reflections.createdAt)).limit(7);
+        recentEmotions = recent.map((r: any) => r.emotion);
+      } catch (e) {
+        console.log("DB init error:", e);
+      }
 
-    const reflection = await storage.createReflection(DEFAULT_USER_ID, {
-      inputText: body.inputText,
-      emotion: analysis.emotion,
-      summary: analysis.summary,
-      reframe: analysis.reframe,
-      actions: analysis.actions,
-      voice: body.voice,
-      sentiment: null,
-      energy: null,
-    });
+      // AI analysis
+      let analysis;
+      const isCrisis = detectCrisisServer(body.inputText);
+      try {
+        analysis = await analyzeReflection(body.inputText, recentEmotions, isCrisis, body.model);
+      } catch (e) {
+        console.log("AI analysis failed:", e);
+        analysis = {
+          emotion: "Mixed",
+          summary: "I'm processing what you shared. Your feelings are valid and important.",
+          reframe: "Taking time to reflect is a meaningful step toward understanding yourself better.",
+          actions: ["Take a few deep breaths", "Note one thing you're grateful for", "Take a short walk or stretch"],
+        };
+      }
 
-    res.json(reflection);
-  } catch (error) {
-    console.error("Error creating reflection:", error);
-    
-    if (error instanceof z.ZodError) {
-      res.status(400).json({
-        error: "Validation error",
-        details: error.errors,
+      // Save to DB with REAL userId
+      if (database) {
+        try {
+          const id = randomUUID();
+          const result = await database.insert(reflections).values({
+            id,
+            userId: userId,
+            inputText: body.inputText,
+            emotion: analysis.emotion,
+            summary: analysis.summary,
+            reframe: analysis.reframe,
+            actions: analysis.actions,
+            voice: body.voice ?? false,
+            sentiment: null,
+            energy: null,
+          }).returning();
+          res.status(200).json(result[0]);
+          return;
+        } catch (e) {
+          console.log("DB insert error:", e);
+        }
+      }
+
+      res.status(200).json({
+        id: "local-" + Date.now(),
+        userId: userId,
+        inputText: body.inputText,
+        emotion: analysis.emotion,
+        summary: analysis.summary,
+        reframe: analysis.reframe,
+        actions: analysis.actions,
+        voice: body.voice ?? false,
+        sentiment: null,
+        energy: null,
+        createdAt: new Date().toISOString(),
       });
-      return;
+
+    } else if (req.method === 'GET') {
+      try {
+        const database = getDb();
+        const data = await database.select().from(reflections).where(eq(reflections.userId, userId)).orderBy(desc(reflections.createdAt));
+        res.status(200).json(data);
+      } catch (e) {
+        console.log("DB read error:", e);
+        res.status(200).json([]);
+      }
+    } else {
+      res.status(405).json({ error: 'Method not allowed' });
     }
-
-    res.status(500).json({
-      error: "Failed to create reflection",
-      message: error instanceof Error ? error.message : "Unknown error",
-    });
-  }
-});
-
-app.get("/api/reflections", async (req, res) => {
-  try {
-    await ensureInitialized();
-    
-    const reflections = await storage.getReflections(DEFAULT_USER_ID);
-    res.json(reflections);
   } catch (error) {
-    console.error("Error fetching reflections:", error);
-    res.status(500).json({
-      error: "Failed to fetch reflections",
-    });
+    console.error("Handler error:", error);
+    res.status(500).json({ error: "Internal server error", message: error instanceof Error ? error.message : "Unknown error" });
   }
-});
-
-export default app;
+}
